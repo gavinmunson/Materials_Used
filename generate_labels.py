@@ -3,6 +3,7 @@ import re
 from collections import defaultdict
 from docx import Document
 from docx.shared import Pt
+import openpyxl
 
 # ---- helpers ----
 
@@ -116,6 +117,20 @@ def abbreviate_collectors(raw):
         abbreviated.append(' '.join(parts))
     return ', '.join(abbreviated)
 
+def abbreviate_collectors_and(raw):
+    """Handle 'X and Y' or 'X, Y' collector strings → 'X. & Y.'"""
+    if not raw:
+        return raw
+    parts = re.split(r'\s+and\s+|,\s*', raw)
+    abbreviated = []
+    for name in parts:
+        name = name.strip()
+        words = name.split()
+        if words:
+            words[0] = words[0][0] + '.'
+        abbreviated.append(' '.join(words))
+    return ' & '.join(abbreviated)
+
 def county_location(location):
     """Strip site name after county, collapsing all sites in the same county to one key."""
     m = re.match(r'^(.*?\bCo\.),.*$', location)
@@ -152,24 +167,85 @@ def normalize_location(raw):
         return f'{country}: {subdivision}, {site}'
     return f'{country}: {subdivision}'
 
+NUM_WORDS = {
+    1: 'One', 2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five',
+    6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten',
+}
+
+def num_to_word(n):
+    return NUM_WORDS.get(n, str(n))
+
+def normalize_curation_note(raw):
+    if not raw:
+        return ''
+    return raw[0].lower() + raw[1:]
+
+# Gen+morph keyed lookups — morph values come from MorphoData.csv (aptera/alate),
+# not from the Excel Morph column, so Gen I aptera = fundatrices (fp), not apt.
+HIST_GEN_MORPH_HEADINGS = {
+    ('1', 'aptera'):   'Generation I — Fundatrices',
+    ('1', 'fundatrix'): 'Generation I — Fundatrices',
+    ('2', 'alate'):    'Generation II — Alate Virginoparae',
+    ('2', 'virginoparae alate'): 'Generation II — Alate Virginoparae',
+    ('3', 'aptera'):   'Generation III — Coccidiformes',
+    ('3', 'alate'):    'Generation III — Coccidiformes',
+    ('4', 'aptera'):   'Generation IV — Apterous Virginoparae',
+    ('5', 'aptera'):   'Generation V — Apterous Virginoparae',
+    ('5', 'alate'):    'Generation V — Alate Sexuparae',
+}
+
+HIST_GEN_MORPH_ABBREV = {
+    ('1', 'aptera'):   'fp',
+    ('1', 'fundatrix'): 'fp',
+    ('2', 'alate'):    'al.',
+    ('2', 'virginoparae alate'): 'al.',
+    ('3', 'aptera'):   'apt.',
+    ('3', 'alate'):    'al.',
+    ('4', 'aptera'):   'apt.',
+    ('5', 'aptera'):   'apt.',
+    ('5', 'alate'):    'al.',
+}
+
+def hist_section_heading(gen, morph):
+    key = (str(gen), str(morph).lower().strip())
+    return HIST_GEN_MORPH_HEADINGS.get(key, f'Generation {gen} — {morph}')
+
 # H and N are treated as one display group; L is separate
 CLADE_GROUPS = [('L', ['L']), ('H+N', ['H', 'N'])]
 ACTUAL_TO_DISPLAY_CLADE = {a: disp for disp, actuals in CLADE_GROUPS for a in actuals}
 
+# ---- load historical data ----
+
+hist_data = {}  # Collection_ID -> row dict
+wb = openpyxl.load_workbook('../~data/HistoricCollData.xlsx')
+ws = wb.active
+hist_headers = [str(cell.value) for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+for row in ws.iter_rows(min_row=2, values_only=True):
+    if row[0] is None:
+        continue
+    rec = dict(zip(hist_headers, row))
+    cid = str(rec.get('Collection_ID', '')).strip()
+    if cid:
+        hist_data[cid] = rec
+
 # ---- load data ----
 
-# data.csv: count slides per (base, gen, clade, morph)
+# data.csv: count slides per (base, gen, clade, morph); collect slide IDs for historical entries
 slide_groups = defaultdict(int)
-with open('../~Data/MorphoData.csv', newline='', encoding='utf-8') as f:
+slide_ids_by_cid = defaultdict(list)
+
+with open('../~data/MorphoData.csv', newline='', encoding='utf-8') as f:
     reader = csv.DictReader(f)
     for row in reader:
         base = strip_letter_suffix(row['Collection_ID'])
         key = (base, row['Gen'], row['Clade'], row['Morph'])
         slide_groups[key] += 1
+        if base in hist_data:
+            slide_ids_by_cid[base].append(row['Slide_ID'])
 
-# CollectionData.csv
+# CollectionData.csv (local copy retains space-separated column names)
 coll_data = {}
-with open('../~Data/CollectionData.csv', newline='', encoding='utf-8', errors='replace') as f:
+with open('CollectionData.csv', newline='', encoding='utf-8', errors='replace') as f:
     reader = csv.DictReader(f)
     for row in reader:
         coll_data[row['Collection ID']] = row
@@ -179,11 +255,30 @@ with open('../~Data/CollectionData.csv', newline='', encoding='utf-8', errors='r
 
 canonical_gen_label_counts = defaultdict(lambda: defaultdict(int))
 flagged_ids = set()
+hist_raw_entries = []  # raw historical entries before grouping
 
 for (base, gen, clade, morph), count in slide_groups.items():
     rec, canonical_id = lookup_cid(base, coll_data)
     if rec is None:
-        flagged_ids.add(base)
+        hist_rec = hist_data.get(base)
+        if hist_rec is not None:
+            acc_raw = hist_rec.get('Collection Accession ID')
+            acc_str = str(int(acc_raw)) if isinstance(acc_raw, (int, float)) and acc_raw == acc_raw else (str(acc_raw) if acc_raw else '')
+            hist_raw_entries.append({
+                'base':          base,
+                'gen':           str(gen),
+                'morph':         str(morph).lower().strip(),
+                'location':      str(hist_rec.get('Location', '')),
+                'date':          str(hist_rec.get('Date', '?')),
+                'host':          str(hist_rec.get('Host', '')),
+                'collector':     abbreviate_collectors_and(str(hist_rec.get('Collector', ''))),
+                'institution':   str(hist_rec.get('Institution', '')),
+                'accession':     acc_str,
+                'slide_ids':     slide_ids_by_cid.get(base, [base]),
+                'curation_note': normalize_curation_note(str(hist_rec.get('Special', '') or '')),
+            })
+        else:
+            flagged_ids.add(base)
         continue
     display_clade = ACTUAL_TO_DISPLAY_CLADE.get(clade, clade)
     canonical_gen_label_counts[(canonical_id, display_clade)][gen_label(gen, morph)] += count
@@ -204,6 +299,29 @@ for (canonical_id, display_clade), glc in canonical_gen_label_counts.items():
         'gps': rec.get('Decimal Degrees GPS Coordinates', ''),
         'genbank': rec.get('GenBank Accession', ''),
     })
+
+# ---- group historical entries by (gen, morph, location, date, host, collector) ----
+
+hist_groups = defaultdict(lambda: {
+    'slide_ids': [], 'institution': '', 'accession': set(), 'curation_notes': set(),
+    'gen': '', 'morph': '', 'location': '', 'date': '', 'host': '', 'collector': '',
+})
+for e in hist_raw_entries:
+    key = (e['gen'], e['morph'], e['location'], e['date'], e['host'], e['collector'])
+    g = hist_groups[key]
+    g['slide_ids'].extend(e['slide_ids'])
+    g['institution'] = e['institution']
+    if e['accession']:
+        g['accession'].add(e['accession'])
+    if e['curation_note']:
+        g['curation_notes'].add(e['curation_note'])
+    g.update({k: e[k] for k in ('gen', 'morph', 'location', 'date', 'host', 'collector')})
+
+# Sort: by gen numerically, then by location
+sorted_hist = sorted(
+    hist_groups.values(),
+    key=lambda g: (int(g['gen']) if g['gen'].isdigit() else 99, g['location']),
+)
 
 # ---- merge entries by (county_location, display_clade) ----
 
@@ -318,7 +436,26 @@ def write_label_para(doc, lbl):
         prev_date = sg['date']
         prev_collector = sg['collector']
 
-    # flags written separately at bottom, not inline
+def write_hist_label_para(doc, g):
+    p = doc.add_paragraph()
+    count = len(g['slide_ids'])
+    gen_roman = GEN_ROMAN.get(str(g['gen']), g['gen'])
+    morph_abbrev = HIST_GEN_MORPH_ABBREV.get((str(g['gen']), g['morph']), g['morph'])
+    morph_count = f'({count} Gen {gen_roman} {morph_abbrev})'
+
+    p.add_run(f'{g["location"]}; {g["date"]}; ex ')
+    p.add_run(g['host']).italic = True
+    p.add_run(f'; {g["collector"]}; ')
+    p.add_run(', '.join(g['slide_ids']))
+    p.add_run(f'; {morph_count}')
+
+    curation_notes = g.get('curation_notes', set())
+    curation_str = f' ({", ".join(sorted(curation_notes))})' if curation_notes else ''
+    acc_list = ', '.join(sorted(g['accession']))
+    if acc_list:
+        p.add_run(f'{curation_str} [{g["institution"]} acc. {acc_list}].')
+    else:
+        p.add_run(f'{curation_str} [{g["institution"]}].')
 
 doc = Document()
 
@@ -343,7 +480,6 @@ def sort_labels(lbls):
         label_min_key(lbl),
     ))
 
-written_clade_groups = set()
 first_section = True
 
 for display_clade, _ in CLADE_GROUPS:
@@ -360,6 +496,20 @@ for display_clade, _ in CLADE_GROUPS:
 
     for lbl in combined:
         write_label_para(doc, lbl)
+
+# ---- historical specimens section ----
+
+if sorted_hist:
+    doc.add_paragraph()
+    doc.add_heading('Historical Morphometric Specimens', level=1)
+
+    current_heading = None
+    for g in sorted_hist:
+        heading = hist_section_heading(g['gen'], g['morph'])
+        if heading != current_heading:
+            doc.add_heading(heading, level=2)
+            current_heading = heading
+        write_hist_label_para(doc, g)
 
 # ---- flagged section ----
 
@@ -379,4 +529,4 @@ for fid in sorted(flagged_ids):
     doc.add_paragraph(fid)
 
 doc.save('labels_output.docx')
-print(f'Done. {len(labels)} labels written, {len(flagged_ids)} flagged IDs.')
+print(f'Done. {len(labels)} modern labels written, {len(sorted_hist)} historical groups, {len(flagged_ids)} flagged IDs.')
