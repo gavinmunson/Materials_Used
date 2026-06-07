@@ -74,8 +74,9 @@ SUBDIVISION_NAMES = {
 }
 
 COUNTRY_NAMES = {
-    'USA': 'United States of America',
-    'CA':  'Canada',
+    'USA':           'United States of America',
+    'CA':            'Canada',
+    'United States': 'United States of America',
 }
 
 GEN_ROMAN = {'1': 'I', '2': 'II', '3': 'III', '4': 'IV', '5': 'V'}
@@ -195,16 +196,18 @@ HIST_GEN_MORPH_HEADINGS = {
 }
 
 HIST_GEN_MORPH_ABBREV = {
-    ('1', 'aptera'):   'fp',
-    ('1', 'fundatrix'): 'fp',
-    ('2', 'alate'):    'al.',
-    ('2', 'virginoparae alate'): 'al.',
-    ('3', 'aptera'):   'apt.',
-    ('3', 'alate'):    'al.',
-    ('4', 'aptera'):   'apt.',
-    ('5', 'aptera'):   'apt.',
-    ('5', 'alate'):    'al.',
+    ('1', 'aptera'):             'Gen I fund.',
+    ('1', 'fundatrix'):          'Gen I fund.',
+    ('2', 'alate'):              'Gen II al. Vp.',
+    ('2', 'virginoparae alate'): 'Gen II al. Vp.',
+    ('3', 'aptera'):             'Gen III coccidiform',
+    ('3', 'alate'):              'Gen III coccidiform',
+    ('4', 'aptera'):             'Gen IV apt. Vp.',
+    ('5', 'aptera'):             'Gen V apt.',
+    ('5', 'alate'):              'Gen V al. Sp.',
 }
+
+LECTOTYPE_PREFIXES = ('lectotype:', 'holotype:', 'paratype:', 'neotype:', 'paralectotype:', 'allotype:')
 
 def hist_section_heading(gen, morph):
     key = (str(gen), str(morph).lower().strip())
@@ -230,9 +233,8 @@ for row in ws.iter_rows(min_row=2, values_only=True):
 
 # ---- load data ----
 
-# data.csv: count slides per (base, gen, clade, morph); collect slide IDs for historical entries
+# MorphoData.csv: count specimens per (base, gen, clade, morph)
 slide_groups = defaultdict(int)
-slide_ids_by_cid = defaultdict(list)
 
 with open('../~data/MorphoData.csv', newline='', encoding='utf-8') as f:
     reader = csv.DictReader(f)
@@ -240,8 +242,6 @@ with open('../~data/MorphoData.csv', newline='', encoding='utf-8') as f:
         base = strip_letter_suffix(row['Collection_ID'])
         key = (base, row['Gen'], row['Clade'], row['Morph'])
         slide_groups[key] += 1
-        if base in hist_data:
-            slide_ids_by_cid[base].append(row['Slide_ID'])
 
 # CollectionData.csv (local copy retains space-separated column names)
 coll_data = {}
@@ -255,28 +255,72 @@ with open('CollectionData.csv', newline='', encoding='utf-8', errors='replace') 
 
 canonical_gen_label_counts = defaultdict(lambda: defaultdict(int))
 flagged_ids = set()
-hist_raw_entries = []  # raw historical entries before grouping
+lectotype_entries = []
+
+def _acc_str(raw):
+    if isinstance(raw, (int, float)) and raw == raw:
+        return str(int(raw))
+    return str(raw).strip() if raw else ''
+
+def _hist_id_from_rec(hist_rec, fallback_cid):
+    """Return the canonical display ID for a historical slide."""
+    raw = hist_rec.get('Historic ID')
+    if raw is None or str(raw).strip() in ('', 'None', 'nan'):
+        return str(hist_rec.get('Slide_ID', fallback_cid)).strip()
+    if isinstance(raw, (int, float)) and raw == int(raw):
+        return str(int(raw))
+    return str(raw).strip()
+
+def _hist_id_sort_key(hid):
+    try:
+        return (0, int(hid), '')
+    except (ValueError, TypeError):
+        return (1, 0, str(hid))
+
+# hist_slide_specimens: keyed by Historic_ID, accumulates specimen count and metadata
+hist_slide_specimens = defaultdict(lambda: {
+    'count': 0, 'gen': '', 'morph': '', 'location': '', 'date': '',
+    'host': '', 'collector': '', 'institution': '', 'accessions': set(), 'curation_notes': set(),
+})
 
 for (base, gen, clade, morph), count in slide_groups.items():
     rec, canonical_id = lookup_cid(base, coll_data)
     if rec is None:
         hist_rec = hist_data.get(base)
         if hist_rec is not None:
-            acc_raw = hist_rec.get('Collection Accession ID')
-            acc_str = str(int(acc_raw)) if isinstance(acc_raw, (int, float)) and acc_raw == acc_raw else (str(acc_raw) if acc_raw else '')
-            hist_raw_entries.append({
-                'base':          base,
-                'gen':           str(gen),
-                'morph':         str(morph).lower().strip(),
-                'location':      str(hist_rec.get('Location', '')),
-                'date':          str(hist_rec.get('Date', '?')),
-                'host':          str(hist_rec.get('Host', '')),
-                'collector':     abbreviate_collectors_and(str(hist_rec.get('Collector', ''))),
-                'institution':   str(hist_rec.get('Institution', '')),
-                'accession':     acc_str,
-                'slide_ids':     slide_ids_by_cid.get(base, [base]),
-                'curation_note': normalize_curation_note(str(hist_rec.get('Special', '') or '')),
-            })
+            # Type specimens: pull out separately, do not include in regular slide counts
+            if any(str(base).lower().startswith(p) for p in LECTOTYPE_PREFIXES):
+                lectotype_entries.append({
+                    'type_status': str(base).split(':')[0].strip().capitalize(),
+                    'gen':         str(gen),
+                    'morph':       str(morph).lower().strip(),
+                    'location':    normalize_location(str(hist_rec.get('Location', ''))),
+                    'date':        format_date(str(hist_rec.get('Date', '?'))),
+                    'host':        str(hist_rec.get('Host', '')),
+                    'collector':   abbreviate_collectors_and(str(hist_rec.get('Collector', ''))),
+                    'institution': str(hist_rec.get('Institution', '')),
+                    'accession':   _acc_str(hist_rec.get('Collection Accession ID')),
+                    'curation_note': normalize_curation_note(str(hist_rec.get('Special', '') or '')),
+                })
+                continue
+
+            hist_id = _hist_id_from_rec(hist_rec, base)
+            acc = _acc_str(hist_rec.get('Collection Accession ID'))
+            note = normalize_curation_note(str(hist_rec.get('Special', '') or ''))
+
+            slide = hist_slide_specimens[hist_id]
+            slide['count'] += count
+            slide['gen'] = str(gen)
+            slide['morph'] = str(morph).lower().strip()
+            slide['location'] = normalize_location(str(hist_rec.get('Location', '')))
+            slide['date'] = format_date(str(hist_rec.get('Date', '?')))
+            slide['host'] = str(hist_rec.get('Host', ''))
+            slide['collector'] = abbreviate_collectors_and(str(hist_rec.get('Collector', '')))
+            slide['institution'] = str(hist_rec.get('Institution', ''))
+            if acc:
+                slide['accessions'].add(acc)
+            if note:
+                slide['curation_notes'].add(note)
         else:
             flagged_ids.add(base)
         continue
@@ -300,28 +344,34 @@ for (canonical_id, display_clade), glc in canonical_gen_label_counts.items():
         'genbank': rec.get('GenBank Accession', ''),
     })
 
-# ---- group historical entries by (gen, morph, location, date, host, collector) ----
+# ---- group historical slides by collection event ----
 
-hist_groups = defaultdict(lambda: {
-    'slide_ids': [], 'institution': '', 'accession': set(), 'curation_notes': set(),
-    'gen': '', 'morph': '', 'location': '', 'date': '', 'host': '', 'collector': '',
-})
-for e in hist_raw_entries:
-    key = (e['gen'], e['morph'], e['location'], e['date'], e['host'], e['collector'])
-    g = hist_groups[key]
-    g['slide_ids'].extend(e['slide_ids'])
-    g['institution'] = e['institution']
-    if e['accession']:
-        g['accession'].add(e['accession'])
-    if e['curation_note']:
-        g['curation_notes'].add(e['curation_note'])
-    g.update({k: e[k] for k in ('gen', 'morph', 'location', 'date', 'host', 'collector')})
+hist_event_slides = defaultdict(list)
+for hist_id, slide in hist_slide_specimens.items():
+    event_key = (slide['gen'], slide['morph'], slide['location'], slide['date'], slide['host'], slide['collector'])
+    hist_event_slides[event_key].append((hist_id, slide))
 
-# Sort: by gen numerically, then by location
-sorted_hist = sorted(
-    hist_groups.values(),
-    key=lambda g: (int(g['gen']) if g['gen'].isdigit() else 99, g['location']),
-)
+hist_events = []
+for (gen, morph, location, date, host, collector), slides_list in hist_event_slides.items():
+    total_count = sum(s['count'] for _, s in slides_list)
+    institutions = sorted({s['institution'] for _, s in slides_list if s['institution']})
+    accessions = set()
+    curation_notes = set()
+    for _, s in slides_list:
+        accessions |= s['accessions']
+        curation_notes |= s['curation_notes']
+    sorted_ids = [hid for hid, _ in sorted(slides_list, key=lambda x: _hist_id_sort_key(x[0]))]
+    hist_events.append({
+        'gen': gen, 'morph': morph,
+        'location': location, 'date': date, 'host': host, 'collector': collector,
+        'total_count': total_count,
+        'hist_ids': sorted_ids,
+        'institutions': institutions,
+        'accessions': accessions,
+        'curation_notes': curation_notes,
+    })
+
+hist_events.sort(key=lambda e: (int(e['gen']) if e['gen'].isdigit() else 99, e['location']))
 
 # ---- merge entries by (county_location, display_clade) ----
 
@@ -436,26 +486,38 @@ def write_label_para(doc, lbl):
         prev_date = sg['date']
         prev_collector = sg['collector']
 
-def write_hist_label_para(doc, g):
+def write_hist_label_para(doc, e):
     p = doc.add_paragraph()
-    count = len(g['slide_ids'])
-    gen_roman = GEN_ROMAN.get(str(g['gen']), g['gen'])
-    morph_abbrev = HIST_GEN_MORPH_ABBREV.get((str(g['gen']), g['morph']), g['morph'])
-    morph_count = f'({count} Gen {gen_roman} {morph_abbrev})'
+    morph_label = HIST_GEN_MORPH_ABBREV.get((str(e['gen']), e['morph']), e['morph'])
+    ids_str = ', '.join(str(hid) for hid in e['hist_ids'])
 
-    p.add_run(f'{g["location"]}; {g["date"]}; ex ')
-    p.add_run(g['host']).italic = True
-    p.add_run(f'; {g["collector"]}; ')
-    p.add_run(', '.join(g['slide_ids']))
-    p.add_run(f'; {morph_count}')
+    p.add_run(f'{e["location"]}, ')
+    p.add_run(e['host']).italic = True
+    p.add_run(f', {e["date"]}, {e["collector"]}')
+    p.add_run(f' ({e["total_count"]} {morph_label}; {ids_str})')
 
-    curation_notes = g.get('curation_notes', set())
-    curation_str = f' ({", ".join(sorted(curation_notes))})' if curation_notes else ''
-    acc_list = ', '.join(sorted(g['accession']))
-    if acc_list:
-        p.add_run(f'{curation_str} [{g["institution"]} acc. {acc_list}].')
+    curation_str = f' ({", ".join(sorted(e["curation_notes"]))})' if e['curation_notes'] else ''
+    inst_str = ', '.join(e['institutions'])
+    acc_str = ', '.join(sorted(e['accessions']))
+    if acc_str:
+        p.add_run(f'{curation_str} [{inst_str} acc. {acc_str}].')
     else:
-        p.add_run(f'{curation_str} [{g["institution"]}].')
+        p.add_run(f'{curation_str} [{inst_str}].')
+
+def write_lectotype_para(doc, e):
+    p = doc.add_paragraph()
+    morph_label = HIST_GEN_MORPH_ABBREV.get((str(e['gen']), e['morph']), e['morph'])
+    run = p.add_run(e['type_status'])
+    run.bold = True
+    p.add_run(f' ♀ ({morph_label}): {e["location"]}, ')
+    p.add_run(e['host']).italic = True
+    p.add_run(f', {e["date"]}, {e["collector"]}')
+    if e['curation_note']:
+        p.add_run(f' ({e["curation_note"]})')
+    if e['accession']:
+        p.add_run(f' [{e["institution"]} acc. {e["accession"]}].')
+    else:
+        p.add_run(f' [{e["institution"]}].')
 
 doc = Document()
 
@@ -497,19 +559,40 @@ for display_clade, _ in CLADE_GROUPS:
     for lbl in combined:
         write_label_para(doc, lbl)
 
+# ---- type material section ----
+
+if lectotype_entries:
+    doc.add_paragraph()
+    doc.add_heading('Type Material', level=1)
+    # Group by type status
+    type_status_order = ['Holotype', 'Lectotype', 'Paratype', 'Paralectotype', 'Allotype', 'Neotype']
+    by_status = defaultdict(list)
+    for e in lectotype_entries:
+        by_status[e['type_status']].append(e)
+    for status in type_status_order:
+        if status in by_status:
+            doc.add_heading(status, level=2)
+            for e in by_status[status]:
+                write_lectotype_para(doc, e)
+    for status, entries_list in by_status.items():
+        if status not in type_status_order:
+            doc.add_heading(status, level=2)
+            for e in entries_list:
+                write_lectotype_para(doc, e)
+
 # ---- historical specimens section ----
 
-if sorted_hist:
+if hist_events:
     doc.add_paragraph()
     doc.add_heading('Historical Morphometric Specimens', level=1)
 
     current_heading = None
-    for g in sorted_hist:
-        heading = hist_section_heading(g['gen'], g['morph'])
+    for e in hist_events:
+        heading = hist_section_heading(e['gen'], e['morph'])
         if heading != current_heading:
             doc.add_heading(heading, level=2)
             current_heading = heading
-        write_hist_label_para(doc, g)
+        write_hist_label_para(doc, e)
 
 # ---- flagged section ----
 
@@ -529,4 +612,4 @@ for fid in sorted(flagged_ids):
     doc.add_paragraph(fid)
 
 doc.save('labels_output.docx')
-print(f'Done. {len(labels)} modern labels written, {len(sorted_hist)} historical groups, {len(flagged_ids)} flagged IDs.')
+print(f'Done. {len(labels)} modern labels written, {len(hist_events)} historical events, {len(lectotype_entries)} type specimens, {len(flagged_ids)} flagged IDs.')
