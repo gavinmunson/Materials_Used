@@ -91,12 +91,11 @@ def gen_label(gen, morph):
         return 'genV'
     return 'gen' + GEN_ROMAN.get(gen, gen)
 
-GEN_LABEL_ORDER = ['genI', 'genII', 'genIII', 'genIV', 'genV', 'genVapt', 'genValat']
+GEN_LABEL_ORDER = ['genI', 'genII', 'genIV', 'genV', 'genVapt', 'genValat']
 
 GEN_LABEL_DISPLAY = {
     'genI':    'gen. I fund.',
     'genII':   'gen. II al. vp.',
-    'genIII':  'gen. III coccidiform',
     'genIV':   'gen. IV apt. vp.',
     'genV':    'gen. V',
     'genVapt': 'gen. V apt. vp.',
@@ -194,15 +193,13 @@ def normalize_curation_note(raw):
 # Gen+morph keyed lookups — morph values come from MorphoData.csv (aptera/alate),
 # not from the Excel Morph column, so Gen I aptera = fundatrices (fp), not apt.
 HIST_GEN_MORPH_HEADINGS = {
-    ('1', 'aptera'):   'Generation I — Fundatrices',
-    ('1', 'fundatrix'): 'Generation I — Fundatrices',
-    ('2', 'alate'):    'Generation II — Alate Virginoparae',
+    ('1', 'aptera'):             'Generation I — Fundatrices',
+    ('1', 'fundatrix'):          'Generation I — Fundatrices',
+    ('2', 'alate'):              'Generation II — Alate Virginoparae',
     ('2', 'virginoparae alate'): 'Generation II — Alate Virginoparae',
-    ('3', 'aptera'):   'Generation III — Coccidiformes',
-    ('3', 'alate'):    'Generation III — Coccidiformes',
-    ('4', 'aptera'):   'Generation IV — Apterous Virginoparae',
-    ('5', 'aptera'):   'Generation V — Apterous Virginoparae',
-    ('5', 'alate'):    'Generation V — Alate Sexuparae',
+    ('4', 'aptera'):             'Generation IV — Apterous Virginoparae',
+    ('5', 'aptera'):             'Generation V — Apterous Virginoparae',
+    ('5', 'alate'):              'Generation V — Alate Sexuparae',
 }
 
 HIST_GEN_MORPH_ABBREV = {
@@ -210,8 +207,6 @@ HIST_GEN_MORPH_ABBREV = {
     ('1', 'fundatrix'):          'gen. I fund.',
     ('2', 'alate'):              'gen. II al. vp.',
     ('2', 'virginoparae alate'): 'gen. II al. vp.',
-    ('3', 'aptera'):             'gen. III coccidiform',
-    ('3', 'alate'):              'gen. III coccidiform',
     ('4', 'aptera'):             'gen. IV apt. vp.',
     ('5', 'aptera'):             'gen. V apt. vp.',
     ('5', 'alate'):              'gen. V al. sp.',
