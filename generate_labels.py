@@ -93,6 +93,16 @@ def gen_label(gen, morph):
 
 GEN_LABEL_ORDER = ['genI', 'genII', 'genIII', 'genIV', 'genV', 'genVapt', 'genValat']
 
+GEN_LABEL_DISPLAY = {
+    'genI':    'gen. I fund.',
+    'genII':   'gen. II al. vp.',
+    'genIII':  'gen. III coccidiform',
+    'genIV':   'gen. IV apt. vp.',
+    'genV':    'gen. V',
+    'genVapt': 'gen. V apt. vp.',
+    'genValat': 'gen. V al. sp.',
+}
+
 def parse_gps(s):
     s = (s or '').strip()
     if not s:
@@ -196,15 +206,15 @@ HIST_GEN_MORPH_HEADINGS = {
 }
 
 HIST_GEN_MORPH_ABBREV = {
-    ('1', 'aptera'):             'Gen I fund.',
-    ('1', 'fundatrix'):          'Gen I fund.',
-    ('2', 'alate'):              'Gen II al. Vp.',
-    ('2', 'virginoparae alate'): 'Gen II al. Vp.',
-    ('3', 'aptera'):             'Gen III coccidiform',
-    ('3', 'alate'):              'Gen III coccidiform',
-    ('4', 'aptera'):             'Gen IV apt. Vp.',
-    ('5', 'aptera'):             'Gen V apt.',
-    ('5', 'alate'):              'Gen V al. Sp.',
+    ('1', 'aptera'):             'gen. I fund.',
+    ('1', 'fundatrix'):          'gen. I fund.',
+    ('2', 'alate'):              'gen. II al. vp.',
+    ('2', 'virginoparae alate'): 'gen. II al. vp.',
+    ('3', 'aptera'):             'gen. III coccidiform',
+    ('3', 'alate'):              'gen. III coccidiform',
+    ('4', 'aptera'):             'gen. IV apt. vp.',
+    ('5', 'aptera'):             'gen. V apt. vp.',
+    ('5', 'alate'):              'gen. V al. sp.',
 }
 
 LECTOTYPE_PREFIXES = ('lectotype:', 'holotype:', 'paratype:', 'neotype:', 'paralectotype:', 'allotype:')
@@ -447,7 +457,7 @@ def format_gen_breakdown(gen_label_counts):
         except ValueError:
             return 999
     sorted_labels = sorted(gen_label_counts.keys(), key=sort_key)
-    parts = [f'{gen_label_counts[k]} {k}' for k in sorted_labels]
+    parts = [f'{gen_label_counts[k]} {GEN_LABEL_DISPLAY.get(k, k)}' for k in sorted_labels]
     return '(' + ', '.join(parts) + ')'
 
 def write_label_para(doc, lbl):
