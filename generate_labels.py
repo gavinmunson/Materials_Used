@@ -346,7 +346,7 @@ for (canonical_id, display_clade), glc in canonical_gen_label_counts.items():
         'host': rec['Host'],
         'collector': abbreviate_collectors(rec.get('Collector', '')),
         'gps': rec.get('Decimal Degrees GPS Coordinates', ''),
-        'genbank': rec.get('GenBank Accession', ''),
+        'genbank': rec.get('GenBank COI', ''),
     })
 
 # ---- group historical slides by collection event ----
